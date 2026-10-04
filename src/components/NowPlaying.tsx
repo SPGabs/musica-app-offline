@@ -1,4 +1,4 @@
-import { useRef, useState, type TouchEvent } from "react";
+import { useState, type PointerEvent } from "react";
 import { Link } from "react-router";
 import {
   ChevronDown,
@@ -21,6 +21,8 @@ import { LikeButton } from "./LikeButton";
 import { formatTime } from "@/lib/audio";
 import { artistHref } from "@/lib/catalog";
 import { isAppleTouchDevice } from "@/lib/device";
+import { haptic } from "@/lib/haptics";
+import { useInteractiveSheet } from "@/hooks/useInteractiveSheet";
 import { cn } from "@/lib/utils";
 
 function Slider({
@@ -78,45 +80,32 @@ export function NowPlaying() {
   const coverUrl = useCoverUrl(current?.id);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const hideVolume = isAppleTouchDevice();
-  const touch = useRef<{ x: number; y: number; t: number } | null>(null);
+  const sheet = useInteractiveSheet(nowPlayingOpen && !!current, () => setNowPlayingOpen(false));
 
-  if (!nowPlayingOpen || !current) return null;
+  if (!sheet.mounted || !current) return null;
 
   const dur = duration || current.duration || 0;
 
-  const onTouchStart = (e: TouchEvent) => {
-    const el = e.target as HTMLElement;
-    if (el.closest("input, button, a, textarea")) return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-    touch.current = { x: t.clientX, y: t.clientY, t: Date.now() };
-  };
-  const onTouchEnd = (e: TouchEvent) => {
-    const start = touch.current;
-    touch.current = null;
-    if (!start) return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    if (Date.now() - start.t > 600) return;
-    if (Math.abs(dx) < 50 && Math.abs(dy) < 50) return;
-    if (Math.abs(dy) > Math.abs(dx) && dy > 80) {
-      setNowPlayingOpen(false);
-      return;
-    }
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
-      if (dx < 0) next(false);
+  const onPointerUp = (e: PointerEvent) => {
+    const result = sheet.onPointerUp(e);
+    if (result?.kind === "skip") {
+      void haptic("medium");
+      if (result.dir === "next") next(false);
       else prev();
     }
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 sheet-up"
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
-    >
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/45 dark:bg-black/70" style={sheet.backdropStyle} />
+      <div
+        className="absolute inset-0 overflow-hidden"
+        style={sheet.sheetStyle}
+        onPointerDown={sheet.onPointerDown}
+        onPointerMove={sheet.onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
       <div className="absolute inset-0 bg-neutral-100 dark:bg-neutral-950" />
       {coverUrl && (
         <div
@@ -127,12 +116,15 @@ export function NowPlaying() {
       <div className="absolute inset-0 bg-white/40 dark:bg-black/50" />
 
       <div className="relative flex h-full flex-col px-6 pt-safe pb-safe max-w-xl mx-auto w-full">
-        <div className="flex items-center justify-between pt-3">
+        <div className="flex justify-center pt-1 pb-1">
+          <div className="h-1.5 w-10 rounded-full bg-black/20 dark:bg-white/30" />
+        </div>
+        <div className="flex items-center justify-between">
           <button
             type="button"
-            onClick={() => setNowPlayingOpen(false)}
+            onClick={sheet.dismiss}
             aria-label="Fechar"
-            className="flex h-11 w-11 items-center justify-center rounded-full active:bg-black/5 dark:active:bg-white/10"
+            className="press flex h-11 w-11 items-center justify-center rounded-full"
           >
             <ChevronDown className="h-7 w-7" />
           </button>
@@ -169,7 +161,7 @@ export function NowPlaying() {
         </div>
 
         {queueOpen ? (
-          <ul className="min-h-0 flex-1 overflow-y-auto py-2">
+          <ul data-no-sheet-drag className="min-h-0 flex-1 overflow-y-auto py-2">
             {queue.map((song, i) => (
               <li key={`${song.id}-${i}`}>
                 <button
@@ -189,7 +181,7 @@ export function NowPlaying() {
             ))}
           </ul>
         ) : lyricsOpen ? (
-          <div className="min-h-0 flex-1 overflow-y-auto py-4">
+          <div data-no-sheet-drag className="min-h-0 flex-1 overflow-y-auto py-4">
             {current.lyrics ? (
               <p className="whitespace-pre-wrap text-center text-[17px] leading-relaxed">
                 {current.lyrics}
@@ -202,11 +194,13 @@ export function NowPlaying() {
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center min-h-0 py-4">
-            <CoverArt
-              songId={current.id}
-              rounded="rounded-2xl"
-              className="aspect-square h-auto w-full max-w-[340px] max-h-full shadow-2xl md:max-w-[420px]"
-            />
+            <div className={cn("cover-stage w-full max-w-[340px] md:max-w-[420px]", isPlaying ? "is-playing" : "is-paused")}>
+              <CoverArt
+                songId={current.id}
+                rounded="rounded-2xl"
+                className="aspect-square h-auto w-full max-w-[340px] max-h-full md:max-w-[420px]"
+              />
+            </div>
           </div>
         )}
 
@@ -216,7 +210,9 @@ export function NowPlaying() {
               <p className="truncate text-xl font-semibold">{current.title}</p>
               <Link
                 to={artistHref(current.artist)}
-                onClick={() => setNowPlayingOpen(false)}
+                onClick={() => {
+                  sheet.dismiss();
+                }}
                 className="truncate text-lg text-brand"
               >
                 {current.artist}
@@ -234,14 +230,25 @@ export function NowPlaying() {
           </div>
 
           <div className="flex items-center justify-center gap-14">
-            <button type="button" onClick={() => next(false)} className="order-3 flex h-14 w-14 items-center justify-center" aria-label="Próxima">
+            <button
+              type="button"
+              onClick={() => {
+                void haptic("medium");
+                next(false);
+              }}
+              className="press order-3 flex h-14 w-14 items-center justify-center"
+              aria-label="Próxima"
+            >
               <SkipForward className="h-9 w-9 fill-current" />
             </button>
             <button
               type="button"
-              onClick={toggle}
+              onClick={() => {
+                void haptic("light");
+                toggle();
+              }}
               aria-label={isPlaying ? "Pausar" : "Tocar"}
-              className="order-2 flex h-20 w-20 items-center justify-center rounded-full bg-foreground text-background shadow-xl active:scale-95 transition-transform"
+              className="press order-2 flex h-20 w-20 items-center justify-center rounded-full bg-foreground text-background shadow-xl"
             >
               {isPlaying ? (
                 <Pause className="h-10 w-10 fill-current" />
@@ -249,7 +256,15 @@ export function NowPlaying() {
                 <Play className="h-10 w-10 fill-current translate-x-0.5" />
               )}
             </button>
-            <button type="button" onClick={prev} className="order-1 flex h-14 w-14 items-center justify-center" aria-label="Anterior">
+            <button
+              type="button"
+              onClick={() => {
+                void haptic("medium");
+                prev();
+              }}
+              className="press order-1 flex h-14 w-14 items-center justify-center"
+              aria-label="Anterior"
+            >
               <SkipBack className="h-9 w-9 fill-current" />
             </button>
           </div>
@@ -301,6 +316,7 @@ export function NowPlaying() {
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

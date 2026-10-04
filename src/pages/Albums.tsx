@@ -26,7 +26,7 @@ export default function Albums() {
         <div className="grid grid-cols-2 gap-4 px-4 pt-3 sm:grid-cols-3 lg:grid-cols-4 lg:px-8 xl:grid-cols-5">
           {albums.map((a) => (
             <div key={`${a.album}-${a.artist}`} className="group relative">
-              <Link to={albumHref(a.artist, a.album)}>
+              <Link to={albumHref(a.artist, a.album)} className="press block">
                 <CoverArt
                   songId={a.coverSongId}
                   rounded="rounded-xl"

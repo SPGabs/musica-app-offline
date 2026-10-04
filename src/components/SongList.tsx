@@ -4,10 +4,12 @@ import { usePlayer } from "@/providers/player";
 import { CoverArt } from "./CoverArt";
 import { SongActions } from "./SongActions";
 import { LikeButton } from "./LikeButton";
+import { PlayingBars } from "./PlayingBars";
 import { formatTime } from "@/lib/audio";
 import { artistHref, albumHref } from "@/lib/catalog";
+import { haptic } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
-import { Pause, Play } from "lucide-react";
+import { Play } from "lucide-react";
 
 interface SongListProps {
   songs: Song[];
@@ -26,16 +28,20 @@ export function SongList({ songs, showAlbum = true }: SongListProps) {
             key={song.id}
             role="button"
             tabIndex={0}
-            onClick={() => (isCurrent ? toggle() : playQueue(songs, i))}
+            onClick={() => {
+              void haptic(isCurrent ? "light" : "medium");
+              if (isCurrent) toggle();
+              else playQueue(songs, i);
+            }}
             onKeyDown={(e) => e.key === "Enter" && (isCurrent ? toggle() : playQueue(songs, i))}
-            className="flex min-h-[56px] cursor-pointer items-center gap-3 px-4 py-2 active:bg-black/5 dark:active:bg-white/10 lg:px-6"
+            className="press-row flex min-h-[56px] cursor-pointer items-center gap-3 px-4 py-2 lg:px-6"
           >
             <div className="relative">
               <CoverArt songId={song.id} className="h-11 w-11" rounded="rounded-md" />
               {isCurrent && (
                 <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/40">
                   {isPlaying ? (
-                    <Pause className="h-4 w-4 fill-white text-white" />
+                    <PlayingBars playing />
                   ) : (
                     <Play className="h-4 w-4 fill-white text-white" />
                   )}
