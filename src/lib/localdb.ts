@@ -1,0 +1,184 @@
+import type { Song } from "./types";
+
+/** Registo completo de uma música guardado no IndexedDB. */
+export interface SongRecord extends Song {
+  audio: Blob;
+  cover: Blob | null;
+  mime: string;
+}
+
+export interface PlaylistRecord {
+  id: number;
+  name: string;
+  createdAt: number;
+  songIds: number[];
+}
+
+const DB_NAME = "musica-local-db";
+const DB_VERSION = 1;
+const SONGS = "songs";
+const PLAYLISTS = "playlists";
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+function openDb(): Promise<IDBDatabase> {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(SONGS)) {
+          db.createObjectStore(SONGS, { keyPath: "id", autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains(PLAYLISTS)) {
+          db.createObjectStore(PLAYLISTS, { keyPath: "id", autoIncrement: true });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        dbPromise = null;
+        reject(req.error ?? new Error("Falha ao abrir a base local"));
+      };
+    });
+  }
+  return dbPromise;
+}
+
+function run<T>(
+  store: string,
+  mode: IDBTransactionMode,
+  fn: (s: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  return openDb().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const t = db.transaction(store, mode);
+        const req = fn(t.objectStore(store));
+        let result: T;
+        req.onsuccess = () => {
+          result = req.result;
+        };
+        t.oncomplete = () => resolve(result);
+        t.onerror = () => reject(t.error);
+        t.onabort = () => reject(t.error);
+      }),
+  );
+}
+
+// ---------- Músicas ----------
+
+export function listSongRecords(): Promise<SongRecord[]> {
+  return run<SongRecord[]>(SONGS, "readonly", (s) => s.getAll() as IDBRequest<SongRecord[]>);
+}
+
+export function getSongRecord(id: number): Promise<SongRecord | undefined> {
+  return run<SongRecord | undefined>(
+    SONGS,
+    "readonly",
+    (s) => s.get(id) as IDBRequest<SongRecord | undefined>,
+  );
+}
+
+export function addSongRecord(rec: Omit<SongRecord, "id">): Promise<number> {
+  return run<IDBValidKey>(SONGS, "readwrite", (s) => s.add(rec)).then((k) => Number(k));
+}
+
+export function updateSongMeta(
+  id: number,
+  patch: Partial<Pick<SongRecord, "title" | "artist" | "album">>,
+): Promise<void> {
+  return openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction(SONGS, "readwrite");
+        const store = t.objectStore(SONGS);
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+          const rec = getReq.result as SongRecord | undefined;
+          if (rec) store.put({ ...rec, ...patch });
+        };
+        t.oncomplete = () => resolve();
+        t.onerror = () => reject(t.error);
+      }),
+  );
+}
+
+/** Apaga a música e remove referências em todas as playlists. */
+export function deleteSongRecord(id: number): Promise<void> {
+  return openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction([SONGS, PLAYLISTS], "readwrite");
+        t.objectStore(SONGS).delete(id);
+        const pl = t.objectStore(PLAYLISTS);
+        const all = pl.getAll();
+        all.onsuccess = () => {
+          for (const p of all.result as PlaylistRecord[]) {
+            if (p.songIds.includes(id)) {
+              pl.put({ ...p, songIds: p.songIds.filter((s) => s !== id) });
+            }
+          }
+        };
+        t.oncomplete = () => resolve();
+        t.onerror = () => reject(t.error);
+      }),
+  );
+}
+
+// ---------- Playlists ----------
+
+export function listPlaylistRecords(): Promise<PlaylistRecord[]> {
+  return run<PlaylistRecord[]>(
+    PLAYLISTS,
+    "readonly",
+    (s) => s.getAll() as IDBRequest<PlaylistRecord[]>,
+  );
+}
+
+export function createPlaylistRecord(name: string): Promise<number> {
+  const rec = { name, createdAt: Date.now(), songIds: [] as number[] };
+  return run<IDBValidKey>(PLAYLISTS, "readwrite", (s) => s.add(rec)).then((k) => Number(k));
+}
+
+export function putPlaylistRecord(rec: PlaylistRecord): Promise<void> {
+  return run(PLAYLISTS, "readwrite", (s) => s.put(rec)).then(() => undefined);
+}
+
+export function deletePlaylistRecord(id: number): Promise<void> {
+  return run(PLAYLISTS, "readwrite", (s) => s.delete(id)).then(() => undefined);
+}
+
+// ---------- Object URLs (Blob -> URL utilizável em <audio>/<img>) ----------
+
+const audioUrlCache = new Map<number, string>();
+const coverUrlCache = new Map<number, string | null>();
+
+/** URL de reprodução para o áudio de uma música (cache em memória). */
+export async function getAudioUrl(id: number): Promise<string | null> {
+  const cached = audioUrlCache.get(id);
+  if (cached) return cached;
+  const rec = await getSongRecord(id);
+  if (!rec) return null;
+  const url = URL.createObjectURL(rec.audio);
+  audioUrlCache.set(id, url);
+  return url;
+}
+
+/** URL da capa de uma música, ou null se não houver capa. */
+export async function getCoverUrl(id: number): Promise<string | null> {
+  if (coverUrlCache.has(id)) return coverUrlCache.get(id) ?? null;
+  const rec = await getSongRecord(id);
+  const url = rec?.cover ? URL.createObjectURL(rec.cover) : null;
+  coverUrlCache.set(id, url);
+  return url;
+}
+
+/** Liberta caches quando uma música é apagada. */
+export function evictSongUrls(id: number): void {
+  const a = audioUrlCache.get(id);
+  if (a) URL.revokeObjectURL(a);
+  audioUrlCache.delete(id);
+  const c = coverUrlCache.get(id);
+  if (c) URL.revokeObjectURL(c);
+  coverUrlCache.delete(id);
+}

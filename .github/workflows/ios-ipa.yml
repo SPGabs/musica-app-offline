@@ -1,0 +1,55 @@
+# Compila a app iOS (.ipa não assinado) num runner macOS do GitHub.
+# Basta fazer push — não precisa de Mac. Descarregue o artefacto "Musica-unsigned-ipa"
+# em Actions > (execução) > Artifacts, diretamente no Safari do iPad.
+name: iOS IPA (unsigned)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund
+
+      - name: Compilar web app
+        run: npx vite build
+
+      - name: Adicionar e sincronizar projeto iOS (Capacitor)
+        run: |
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Definir ícone da app
+        run: cp resources/icon.png ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+
+      - name: Ativar partilha de ficheiros e áudio em segundo plano
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" ios/App/App/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" ios/App/App/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/App/App/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/App/App/Info.plist || true
+
+      - name: Criar arquivo Xcode (sem assinatura)
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App             -configuration Release -sdk iphoneos             -archivePath build/App.xcarchive archive             CODE_SIGNING_ALLOWED=NO
+
+      - name: Empacotar .ipa
+        run: |
+          mkdir -p ios/App/build/Payload
+          cp -R "ios/App/build/App.xcarchive/Products/Applications/App.app" ios/App/build/Payload/
+          cd ios/App/build && zip -qr Musica-unsigned.ipa Payload
+          mv Musica-unsigned.ipa "$GITHUB_WORKSPACE/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Musica-unsigned-ipa
+          path: Musica-unsigned.ipa
