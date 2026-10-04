@@ -109,6 +109,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const pendingSeekRef = useRef<number | null>(null);
   const restoredRef = useRef(false);
   const lastMarkedRef = useRef<number | null>(null);
+  const bindLockRef = useRef<() => void>(() => {});
 
   const [queue, setQueue] = useState<Song[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -313,6 +314,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           album: song.album ?? "",
           artwork: cover ? [{ src: cover, sizes: "512x512", type: "image/jpeg" }] : [],
         });
+        bindLockRef.current();
       });
     }
 
@@ -459,30 +461,32 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  useEffect(() => {
+  const bindLockScreenControls = useCallback(() => {
     if (!("mediaSession" in navigator)) return;
-    navigator.mediaSession.setActionHandler("play", () => {
+    const ms = navigator.mediaSession;
+    ms.setActionHandler("play", () => {
       const audio = activeRef.current;
       if (!audio) return;
       void startPlayback(audio, speedRef.current, volumeRef.current).catch(() => undefined);
     });
-    navigator.mediaSession.setActionHandler("pause", () => activeRef.current?.pause());
-    navigator.mediaSession.setActionHandler("previoustrack", prev);
-    navigator.mediaSession.setActionHandler("nexttrack", () => nextRef.current(false));
-    navigator.mediaSession.setActionHandler("seekto", (e) => {
+    ms.setActionHandler("pause", () => activeRef.current?.pause());
+    ms.setActionHandler("previoustrack", prev);
+    ms.setActionHandler("nexttrack", () => nextRef.current(false));
+    ms.setActionHandler("seekto", (e) => {
       if (typeof e.seekTime === "number") seek(e.seekTime);
     });
-    navigator.mediaSession.setActionHandler("seekbackward", (e) => {
-      const audio = activeRef.current;
-      if (!audio) return;
-      seek(Math.max(0, audio.currentTime - (e.seekOffset || 10)));
-    });
-    navigator.mediaSession.setActionHandler("seekforward", (e) => {
-      const audio = activeRef.current;
-      if (!audio) return;
-      seek(audio.currentTime + (e.seekOffset || 10));
-    });
+    // No iOS estes dois substituem anterior/próxima na lock screen e nos widgets.
+    ms.setActionHandler("seekbackward", null);
+    ms.setActionHandler("seekforward", null);
   }, [prev, seek]);
+  bindLockRef.current = bindLockScreenControls;
+
+  useEffect(() => {
+    bindLockScreenControls();
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+    }
+  }, [bindLockScreenControls, currentId, isPlaying]);
 
   useEffect(() => {
     if (!ready || restoredRef.current) return;
