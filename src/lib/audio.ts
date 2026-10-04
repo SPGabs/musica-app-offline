@@ -4,8 +4,20 @@ export interface AudioTags {
   title?: string;
   artist?: string;
   album?: string;
+  lyrics?: string;
   coverBlob?: Blob;
   coverContentType?: string;
+}
+
+function extractLyrics(t: Record<string, unknown>): string | undefined {
+  const raw = t.lyrics ?? t.USLT ?? t.unsyncedLyrics;
+  if (typeof raw === "string" && raw.trim()) return raw;
+  if (raw && typeof raw === "object") {
+    const o = raw as { lyrics?: unknown; text?: unknown };
+    if (typeof o.lyrics === "string" && o.lyrics.trim()) return o.lyrics;
+    if (typeof o.text === "string" && o.text.trim()) return o.text;
+  }
+  return undefined;
 }
 
 /** Lê metadados ID3 / MP4 de um ficheiro de áudio no navegador. */
@@ -37,6 +49,7 @@ export async function readAudioTags(file: File): Promise<AudioTags> {
             title: (t.title as string) || undefined,
             artist: (t.artist as string) || undefined,
             album: (t.album as string) || undefined,
+            lyrics: extractLyrics(t),
             coverBlob,
             coverContentType,
           });

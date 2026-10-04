@@ -1,16 +1,20 @@
+import { Link } from "react-router";
 import type { Song } from "@/lib/types";
 import { usePlayer } from "@/providers/player";
 import { CoverArt } from "./CoverArt";
 import { SongActions } from "./SongActions";
+import { LikeButton } from "./LikeButton";
 import { formatTime } from "@/lib/audio";
+import { artistHref, albumHref } from "@/lib/catalog";
 import { cn } from "@/lib/utils";
 import { Pause, Play } from "lucide-react";
 
 interface SongListProps {
   songs: Song[];
+  showAlbum?: boolean;
 }
 
-export function SongList({ songs }: SongListProps) {
+export function SongList({ songs, showAlbum = true }: SongListProps) {
   const { playQueue, current, isPlaying, toggle } = usePlayer();
 
   return (
@@ -23,7 +27,7 @@ export function SongList({ songs }: SongListProps) {
             role="button"
             tabIndex={0}
             onClick={() => (isCurrent ? toggle() : playQueue(songs, i))}
-            onKeyDown={(e) => e.key === "Enter" && playQueue(songs, i)}
+            onKeyDown={(e) => e.key === "Enter" && (isCurrent ? toggle() : playQueue(songs, i))}
             className="flex min-h-[56px] cursor-pointer items-center gap-3 px-4 py-2 active:bg-black/5 dark:active:bg-white/10 lg:px-6"
           >
             <div className="relative">
@@ -43,13 +47,31 @@ export function SongList({ songs }: SongListProps) {
                 {song.title}
               </p>
               <p className="truncate text-[13px] text-neutral-500 dark:text-neutral-400">
-                {song.artist}
-                {song.album ? ` — ${song.album}` : ""}
+                <Link
+                  to={artistHref(song.artist)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hover:underline"
+                >
+                  {song.artist}
+                </Link>
+                {showAlbum && song.album ? (
+                  <>
+                    {" — "}
+                    <Link
+                      to={albumHref(song.artist, song.album)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="hover:underline"
+                    >
+                      {song.album}
+                    </Link>
+                  </>
+                ) : null}
               </p>
             </div>
             <span className="text-[13px] tabular-nums text-neutral-400">
               {song.duration ? formatTime(song.duration) : ""}
             </span>
+            <LikeButton song={song} className="w-9" />
             <SongActions song={song} />
           </li>
         );

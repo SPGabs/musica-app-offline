@@ -8,17 +8,19 @@ import {
   type ReactNode,
 } from "react";
 import type { PlaylistSummary, Song } from "@/lib/types";
+import { toSongMeta } from "@/lib/catalog";
 import {
   addSongRecord,
   createPlaylistRecord,
   deletePlaylistRecord,
   deleteSongRecord,
+  evictCoverUrl,
   evictSongUrls,
   getCoverUrl,
   listPlaylistRecords,
   listSongRecords,
+  patchSongRecord,
   putPlaylistRecord,
-  updateSongMeta,
   type PlaylistRecord,
 } from "@/lib/localdb";
 
@@ -29,25 +31,31 @@ export interface NewSongInput {
   album: string;
   duration: number;
   cover: Blob | null;
+  lyrics?: string | null;
 }
 
 interface LibraryState {
-  /** true quando o IndexedDB já foi carregado */
   ready: boolean;
   songs: Song[];
   playlists: PlaylistSummary[];
+  coverRev: Record<number, number>;
   saveSong: (input: NewSongInput) => Promise<number>;
   updateSong: (
     id: number,
-    patch: { title: string; artist: string; album: string },
+    patch: Partial<Pick<Song, "title" | "artist" | "album" | "liked" | "lyrics">>,
   ) => Promise<void>;
+  setCover: (id: number, cover: Blob | null) => Promise<void>;
+  toggleLike: (id: number) => Promise<void>;
+  markPlayed: (id: number) => Promise<void>;
+  findDuplicate: (file: File) => Song | undefined;
   removeSong: (id: number) => Promise<void>;
   createPlaylist: (name: string) => Promise<number>;
   removePlaylist: (id: number) => Promise<void>;
   addToPlaylist: (playlistId: number, songId: number) => Promise<void>;
   removeFromPlaylist: (playlistId: number, songId: number) => Promise<void>;
-  /** músicas de uma playlist, na ordem guardada (ignora ids inexistentes) */
+  reorderPlaylist: (playlistId: number, from: number, to: number) => Promise<void>;
   playlistSongs: (playlistId: number) => Song[];
+  reload: () => Promise<void>;
 }
 
 const LibraryContext = createContext<LibraryState | null>(null);
@@ -68,23 +76,19 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [songs, setSongs] = useState<Song[]>([]);
   const [playlistRecords, setPlaylistRecords] = useState<PlaylistRecord[]>([]);
+  const [coverRev, setCoverRev] = useState<Record<number, number>>({});
+
+  const reload = useCallback(async () => {
+    const [s, p] = await Promise.all([listSongRecords(), listPlaylistRecords()]);
+    const sorted = [...s].sort((a, b) => b.createdAt - a.createdAt);
+    setSongs(sorted.map(toSongMeta));
+    setPlaylistRecords(p);
+    setReady(true);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void Promise.all([listSongRecords(), listPlaylistRecords()]).then(([s, p]) => {
-      if (cancelled) return;
-      const sorted = [...s].sort((a, b) => b.createdAt - a.createdAt);
-      setSongs(sorted.map((r) => ({
-        id: r.id, title: r.title, artist: r.artist, album: r.album,
-        duration: r.duration, size: r.size, fileName: r.fileName, createdAt: r.createdAt,
-      })));
-      setPlaylistRecords(p);
-      setReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void reload();
+  }, [reload]);
 
   const saveSong = useCallback(async (input: NewSongInput): Promise<number> => {
     const rec = {
@@ -95,34 +99,58 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       size: input.file.size,
       fileName: input.file.name,
       createdAt: Date.now(),
-      // slice() garante um Blob puro (compatível com IndexedDB em todos os WebKit)
+      liked: false,
+      lyrics: input.lyrics ?? null,
+      lastPlayedAt: 0,
+      playCount: 0,
       audio: input.file.slice(0, input.file.size, input.file.type || "audio/mpeg"),
       cover: input.cover,
       mime: input.file.type || "audio/mpeg",
     };
     const id = await addSongRecord(rec);
-    setSongs((prev) => [
-      {
-        id,
-        title: rec.title,
-        artist: rec.artist,
-        album: rec.album,
-        duration: rec.duration,
-        size: rec.size,
-        fileName: rec.fileName,
-        createdAt: rec.createdAt,
-      },
-      ...prev,
-    ]);
+    setSongs((prev) => [toSongMeta({ ...rec, id }), ...prev]);
     return id;
   }, []);
 
   const updateSong = useCallback(
-    async (id: number, patch: { title: string; artist: string; album: string }) => {
-      await updateSongMeta(id, patch);
+    async (
+      id: number,
+      patch: Partial<Pick<Song, "title" | "artist" | "album" | "liked" | "lyrics">>,
+    ) => {
+      await patchSongRecord(id, patch);
       setSongs((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
     },
     [],
+  );
+
+  const setCover = useCallback(async (id: number, cover: Blob | null) => {
+    await patchSongRecord(id, { cover });
+    evictCoverUrl(id);
+    setCoverRev((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
+  }, []);
+
+  const toggleLike = useCallback(async (id: number) => {
+    const current = songs.find((s) => s.id === id);
+    if (!current) return;
+    const liked = !current.liked;
+    await patchSongRecord(id, { liked });
+    setSongs((prev) => prev.map((s) => (s.id === id ? { ...s, liked } : s)));
+  }, [songs]);
+
+  const markPlayed = useCallback(async (id: number) => {
+    const current = songs.find((s) => s.id === id);
+    const playCount = (current?.playCount ?? 0) + 1;
+    const lastPlayedAt = Date.now();
+    await patchSongRecord(id, { playCount, lastPlayedAt });
+    setSongs((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, playCount, lastPlayedAt } : s)),
+    );
+  }, [songs]);
+
+  const findDuplicate = useCallback(
+    (file: File) =>
+      songs.find((s) => s.fileName === file.name && s.size === file.size),
+    [songs],
   );
 
   const removeSong = useCallback(async (id: number) => {
@@ -172,6 +200,21 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [playlistRecords],
   );
 
+  const reorderPlaylist = useCallback(
+    async (playlistId: number, from: number, to: number) => {
+      const rec = playlistRecords.find((p) => p.id === playlistId);
+      if (!rec) return;
+      if (from < 0 || to < 0 || from >= rec.songIds.length || to >= rec.songIds.length) return;
+      const songIds = [...rec.songIds];
+      const [moved] = songIds.splice(from, 1);
+      songIds.splice(to, 0, moved);
+      const next = { ...rec, songIds };
+      await putPlaylistRecord(next);
+      setPlaylistRecords((prev) => prev.map((p) => (p.id === playlistId ? next : p)));
+    },
+    [playlistRecords],
+  );
+
   const playlists = useMemo(
     () => playlistRecords.map((p) => toSummary(p, songs)),
     [playlistRecords, songs],
@@ -192,18 +235,26 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       ready,
       songs,
       playlists,
+      coverRev,
       saveSong,
       updateSong,
+      setCover,
+      toggleLike,
+      markPlayed,
+      findDuplicate,
       removeSong,
       createPlaylist,
       removePlaylist,
       addToPlaylist,
       removeFromPlaylist,
+      reorderPlaylist,
       playlistSongs,
+      reload,
     }),
     [
-      ready, songs, playlists, saveSong, updateSong, removeSong,
-      createPlaylist, removePlaylist, addToPlaylist, removeFromPlaylist, playlistSongs,
+      ready, songs, playlists, coverRev, saveSong, updateSong, setCover, toggleLike,
+      markPlayed, findDuplicate, removeSong, createPlaylist, removePlaylist,
+      addToPlaylist, removeFromPlaylist, reorderPlaylist, playlistSongs, reload,
     ],
   );
 
@@ -216,8 +267,9 @@ export function useLibrary() {
   return ctx;
 }
 
-/** Hook: devolve o object URL da capa de uma música (ou null). */
 export function useCoverUrl(songId: number | null | undefined): string | null {
+  const { coverRev } = useLibrary();
+  const rev = songId != null ? coverRev[songId] ?? 0 : 0;
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (songId == null) {
@@ -231,6 +283,6 @@ export function useCoverUrl(songId: number | null | undefined): string | null {
     return () => {
       cancelled = true;
     };
-  }, [songId]);
+  }, [songId, rev]);
   return url;
 }

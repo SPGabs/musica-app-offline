@@ -11,6 +11,7 @@ import {
 import { useLibrary } from "@/providers/library";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
+import { storageEstimate } from "@/lib/quota";
 import {
   formatBytes,
   probeDuration,
@@ -24,16 +25,16 @@ interface ImportItem {
   title: string;
   artist?: string;
   album?: string;
-  coverPreview?: string; // object URL temporária para a capa
+  coverPreview?: string;
   duration: number;
-  status: "reading" | "saving" | "done" | "error";
+  status: "reading" | "saving" | "done" | "error" | "skipped";
   error?: string;
 }
 
 const ACCEPT = ".mp3,.m4a,.aac,.flac,.wav,.ogg,.oga,.opus,.aiff,.alac,audio/*";
 
 export default function Upload() {
-  const { saveSong } = useLibrary();
+  const { saveSong, findDuplicate } = useLibrary();
   const navigate = useNavigate();
   const [items, setItems] = useState<ImportItem[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -64,6 +65,24 @@ export default function Upload() {
       // lê metadados e guarda diretamente no IndexedDB (tudo local)
       for (const item of newItems) {
         try {
+          const dup = findDuplicate(item.file);
+          if (dup) {
+            setItem(item.id, {
+              title: dup.title,
+              artist: dup.artist,
+              status: "skipped",
+              error: "Já está na biblioteca",
+            });
+            continue;
+          }
+          const space = await storageEstimate();
+          if (Number.isFinite(space.remaining) && space.remaining < item.file.size * 1.2) {
+            setItem(item.id, {
+              status: "error",
+              error: "Espaço insuficiente no dispositivo. Exporte uma cópia em Ajustes.",
+            });
+            continue;
+          }
           const [tags, duration] = await Promise.all([
             readAudioTags(item.file),
             probeDuration(item.file),
@@ -84,6 +103,7 @@ export default function Upload() {
             album: tags.album || "Álbum desconhecido",
             duration,
             cover: tags.coverBlob ?? null,
+            lyrics: tags.lyrics ?? null,
           });
           setItem(item.id, { status: "done" });
         } catch (err) {
@@ -94,10 +114,11 @@ export default function Upload() {
         }
       }
     },
-    [saveSong],
+    [saveSong, findDuplicate],
   );
 
   const done = items.filter((i) => i.status === "done").length;
+  const skipped = items.filter((i) => i.status === "skipped").length;
 
   return (
     <div className="pb-6">
@@ -177,6 +198,7 @@ export default function Upload() {
           <div className="space-y-2">
             <p className="text-sm font-medium text-neutral-500 dark:text-neutral-400">
               {done} de {items.length} adicionadas
+              {skipped ? ` · ${skipped} ignoradas (duplicadas)` : ""}
             </p>
             <ul className="divide-y divide-black/5 rounded-2xl bg-black/[0.03] dark:divide-white/10 dark:bg-white/5">
               {items.map((item) => (
@@ -198,13 +220,15 @@ export default function Upload() {
                       {item.artist ??
                         (item.status === "reading" ? "A ler…" : "Artista desconhecido")}{" "}
                       · {formatBytes(item.file.size)}
-                      {item.status === "error" && (
+                      {item.status === "error" || item.status === "skipped" ? (
                         <span className="text-red-500"> — {item.error}</span>
-                      )}
+                      ) : null}
                     </p>
                   </div>
                   {item.status === "done" && <CheckCircle2 className="h-5 w-5 text-green-500" />}
-                  {item.status === "error" && <XCircle className="h-5 w-5 text-red-500" />}
+                  {(item.status === "error" || item.status === "skipped") && (
+                    <XCircle className="h-5 w-5 text-red-500" />
+                  )}
                   {(item.status === "reading" || item.status === "saving") && (
                     <Loader2 className="h-5 w-5 animate-spin text-brand" />
                   )}

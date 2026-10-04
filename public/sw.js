@@ -1,5 +1,5 @@
 /* Cache da app-shell para PWA no GitHub Pages / Safari iOS. */
-const CACHE = "musica-shell-v2";
+const CACHE = "musica-shell-v3";
 const PRECACHE = ["./index.html", "./manifest.webmanifest", "./favicon.svg"];
 
 self.addEventListener("install", (event) => {

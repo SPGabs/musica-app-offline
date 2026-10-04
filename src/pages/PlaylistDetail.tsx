@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { useParams, useNavigate } from "react-router";
-import { ChevronLeft, Play, Shuffle, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronUp, Play, Shuffle, X } from "lucide-react";
 import { useLibrary } from "@/providers/library";
 import { usePlayer } from "@/providers/player";
 import { CoverArt } from "@/components/CoverArt";
 import { SongActions } from "@/components/SongActions";
+import { LikeButton } from "@/components/LikeButton";
 import { formatTime } from "@/lib/audio";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +13,7 @@ export default function PlaylistDetail() {
   const { id } = useParams<{ id: string }>();
   const playlistId = Number(id);
   const navigate = useNavigate();
-  const { playlists, playlistSongs, removeFromPlaylist } = useLibrary();
+  const { playlists, playlistSongs, removeFromPlaylist, reorderPlaylist } = useLibrary();
   const { playQueue, current, toggle } = usePlayer();
 
   const playlist = useMemo(
@@ -27,11 +28,6 @@ export default function PlaylistDetail() {
   if (!playlist) {
     return <div className="p-8 text-center text-neutral-500">Playlist não encontrada.</div>;
   }
-
-  const shuffleAll = () => {
-    if (!songs.length) return;
-    playQueue([...songs].sort(() => Math.random() - 0.5), 0);
-  };
 
   return (
     <div className="pb-6">
@@ -61,13 +57,15 @@ export default function PlaylistDetail() {
         {songs.length > 0 && (
           <div className="flex w-full max-w-xs items-center gap-3">
             <button
+              type="button"
               onClick={() => playQueue(songs, 0)}
               className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black/5 text-[15px] font-medium text-brand dark:bg-white/10"
             >
               <Play className="h-5 w-5 fill-current" /> Ouvir
             </button>
             <button
-              onClick={shuffleAll}
+              type="button"
+              onClick={() => playQueue([...songs].sort(() => Math.random() - 0.5), 0)}
               className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black/5 text-[15px] font-medium text-brand dark:bg-white/10"
             >
               <Shuffle className="h-5 w-5" /> Aleatório
@@ -87,30 +85,52 @@ export default function PlaylistDetail() {
             return (
               <li
                 key={`${song.id}-${i}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => (isCurrent ? toggle() : playQueue(songs, i))}
-                className="flex min-h-[56px] cursor-pointer items-center gap-3 px-4 py-2 active:bg-black/5 dark:active:bg-white/10 lg:px-6"
+                className="flex min-h-[56px] items-center gap-2 px-3 py-2 lg:px-6"
               >
-                <CoverArt songId={song.id} className="h-11 w-11" rounded="rounded-md" />
-                <div className="min-w-0 flex-1">
-                  <p className={cn("truncate text-[15px]", isCurrent && "text-brand font-medium")}>
-                    {song.title}
-                  </p>
-                  <p className="truncate text-[13px] text-neutral-500 dark:text-neutral-400">
-                    {song.artist}
-                  </p>
+                <div className="flex flex-col">
+                  <button
+                    type="button"
+                    aria-label="Subir"
+                    disabled={i === 0}
+                    className="flex h-6 w-8 items-center justify-center text-neutral-400 disabled:opacity-30"
+                    onClick={() => void reorderPlaylist(playlistId, i, i - 1)}
+                  >
+                    <ChevronUp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Descer"
+                    disabled={i === songs.length - 1}
+                    className="flex h-6 w-8 items-center justify-center text-neutral-400 disabled:opacity-30"
+                    onClick={() => void reorderPlaylist(playlistId, i, i + 1)}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
                 </div>
-                <span className="text-[13px] tabular-nums text-neutral-400">
-                  {song.duration ? formatTime(song.duration) : ""}
-                </span>
                 <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  onClick={() => (isCurrent ? toggle() : playQueue(songs, i))}
+                >
+                  <CoverArt songId={song.id} className="h-11 w-11" rounded="rounded-md" />
+                  <div className="min-w-0 flex-1">
+                    <p className={cn("truncate text-[15px]", isCurrent && "text-brand font-medium")}>
+                      {song.title}
+                    </p>
+                    <p className="truncate text-[13px] text-neutral-500 dark:text-neutral-400">
+                      {song.artist}
+                    </p>
+                  </div>
+                  <span className="text-[13px] tabular-nums text-neutral-400">
+                    {song.duration ? formatTime(song.duration) : ""}
+                  </span>
+                </button>
+                <LikeButton song={song} className="w-8" />
+                <button
+                  type="button"
                   aria-label="Remover da playlist"
                   className="flex h-11 w-8 items-center justify-center text-neutral-400"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void removeFromPlaylist(playlistId, song.id);
-                  }}
+                  onClick={() => void removeFromPlaylist(playlistId, song.id)}
                 >
                   <X className="h-4 w-4" />
                 </button>

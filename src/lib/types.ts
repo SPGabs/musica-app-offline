@@ -12,6 +12,10 @@ export interface Song {
   fileName: string;
   /** Date.now() no momento da importação */
   createdAt: number;
+  liked: boolean;
+  lyrics: string | null;
+  lastPlayedAt: number;
+  playCount: number;
 }
 
 export interface PlaylistSummary {
@@ -21,4 +25,17 @@ export interface PlaylistSummary {
   count: number;
   /** primeira música da playlist, usada como capa */
   coverSongId: number | null;
+}
+
+export type RepeatMode = "off" | "all" | "one";
+
+export interface PersistedPlayer {
+  queueIds: number[];
+  index: number;
+  progress: number;
+  shuffle: boolean;
+  repeat: RepeatMode;
+  volume: number;
+  speed: number;
+  crossfade: number;
 }

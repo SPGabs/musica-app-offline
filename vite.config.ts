@@ -17,5 +17,13 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/jszip")) return "zip";
+          if (id.includes("node_modules/jsmediatags")) return "tags";
+        },
+      },
+    },
   },
 });

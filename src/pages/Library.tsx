@@ -1,18 +1,20 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Play, Plus, Shuffle } from "lucide-react";
+import { Heart, Play, Plus, Shuffle } from "lucide-react";
 import { useLibrary } from "@/providers/library";
 import { usePlayer } from "@/providers/player";
 import { PageHeader } from "@/components/PageHeader";
 import { SongList } from "@/components/SongList";
 import { cn } from "@/lib/utils";
 
-type Sort = "recent" | "title" | "artist";
+type Sort = "recent" | "played" | "title" | "artist" | "liked";
 
 const sorts: { id: Sort; label: string }[] = [
   { id: "recent", label: "Recentes" },
+  { id: "played", label: "Ouvidas" },
   { id: "title", label: "Título" },
   { id: "artist", label: "Artista" },
+  { id: "liked", label: "Gostos" },
 ];
 
 export default function Library() {
@@ -21,7 +23,8 @@ export default function Library() {
   const [sort, setSort] = useState<Sort>("recent");
 
   const sorted = useMemo(() => {
-    const arr = [...songs];
+    let arr = [...songs];
+    if (sort === "liked") arr = arr.filter((s) => s.liked);
     if (sort === "title") arr.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
     else if (sort === "artist")
       arr.sort(
@@ -29,7 +32,8 @@ export default function Library() {
           (a.artist ?? "").localeCompare(b.artist ?? "", "pt-BR") ||
           a.title.localeCompare(b.title, "pt-BR"),
       );
-    return arr; // "recent" mantém ordem por data de importação (desc)
+    else if (sort === "played") arr.sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0));
+    return arr;
   }, [songs, sort]);
 
   const shuffleAll = () => {
@@ -54,15 +58,17 @@ export default function Library() {
         }
       />
 
-      {sorted.length > 0 && (
+      {songs.length > 0 && (
         <div className="flex items-center gap-3 px-4 py-3 lg:px-8">
           <button
-            onClick={() => playQueue(sorted, 0)}
+            type="button"
+            onClick={() => playQueue(sorted.length ? sorted : songs, 0)}
             className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black/5 text-[15px] font-medium text-brand dark:bg-white/10 lg:max-w-52"
           >
             <Play className="h-5 w-5 fill-current" /> Ouvir
           </button>
           <button
+            type="button"
             onClick={shuffleAll}
             className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black/5 text-[15px] font-medium text-brand dark:bg-white/10 lg:max-w-52"
           >
@@ -71,13 +77,14 @@ export default function Library() {
         </div>
       )}
 
-      <div className="flex gap-2 px-4 pb-2 lg:px-8">
+      <div className="flex gap-2 overflow-x-auto px-4 pb-2 no-scrollbar lg:px-8">
         {sorts.map((s) => (
           <button
             key={s.id}
+            type="button"
             onClick={() => setSort(s.id)}
             className={cn(
-              "h-9 rounded-full px-4 text-sm font-medium transition-colors",
+              "h-9 shrink-0 rounded-full px-4 text-sm font-medium transition-colors",
               sort === s.id
                 ? "bg-brand text-white"
                 : "bg-black/5 text-neutral-600 dark:bg-white/10 dark:text-neutral-300",
@@ -88,7 +95,7 @@ export default function Library() {
         ))}
       </div>
 
-      {sorted.length === 0 ? (
+      {songs.length === 0 ? (
         <div className="flex flex-col items-center gap-4 px-8 py-20 text-center">
           <p className="text-lg font-medium">A sua biblioteca está vazia</p>
           <p className="max-w-sm text-sm text-neutral-500 dark:text-neutral-400">
@@ -101,6 +108,11 @@ export default function Library() {
           >
             <Plus className="h-5 w-5" /> Adicionar músicas
           </Link>
+        </div>
+      ) : sorted.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 px-8 py-16 text-center">
+          <Heart className="h-10 w-10 text-neutral-300 dark:text-neutral-600" />
+          <p className="text-sm text-neutral-500">Ainda não marcou nenhuma música como gosto.</p>
         </div>
       ) : (
         <SongList songs={sorted} />

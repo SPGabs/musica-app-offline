@@ -65,8 +65,6 @@ function run<T>(
   );
 }
 
-// ---------- Músicas ----------
-
 export function listSongRecords(): Promise<SongRecord[]> {
   return run<SongRecord[]>(SONGS, "readonly", (s) => s.getAll() as IDBRequest<SongRecord[]>);
 }
@@ -83,9 +81,9 @@ export function addSongRecord(rec: Omit<SongRecord, "id">): Promise<number> {
   return run<IDBValidKey>(SONGS, "readwrite", (s) => s.add(rec)).then((k) => Number(k));
 }
 
-export function updateSongMeta(
+export function patchSongRecord(
   id: number,
-  patch: Partial<Pick<SongRecord, "title" | "artist" | "album">>,
+  patch: Partial<Omit<SongRecord, "id">>,
 ): Promise<void> {
   return openDb().then(
     (db) =>
@@ -103,7 +101,6 @@ export function updateSongMeta(
   );
 }
 
-/** Apaga a música e remove referências em todas as playlists. */
 export function deleteSongRecord(id: number): Promise<void> {
   return openDb().then(
     (db) =>
@@ -124,8 +121,6 @@ export function deleteSongRecord(id: number): Promise<void> {
       }),
   );
 }
-
-// ---------- Playlists ----------
 
 export function listPlaylistRecords(): Promise<PlaylistRecord[]> {
   return run<PlaylistRecord[]>(
@@ -148,12 +143,9 @@ export function deletePlaylistRecord(id: number): Promise<void> {
   return run(PLAYLISTS, "readwrite", (s) => s.delete(id)).then(() => undefined);
 }
 
-// ---------- Object URLs (Blob -> URL utilizável em <audio>/<img>) ----------
-
 const audioUrlCache = new Map<number, string>();
 const coverUrlCache = new Map<number, string | null>();
 
-/** URL de reprodução para o áudio de uma música (cache em memória). */
 export async function getAudioUrl(id: number): Promise<string | null> {
   const cached = audioUrlCache.get(id);
   if (cached) return cached;
@@ -164,7 +156,6 @@ export async function getAudioUrl(id: number): Promise<string | null> {
   return url;
 }
 
-/** URL da capa de uma música, ou null se não houver capa. */
 export async function getCoverUrl(id: number): Promise<string | null> {
   if (coverUrlCache.has(id)) return coverUrlCache.get(id) ?? null;
   const rec = await getSongRecord(id);
@@ -173,12 +164,15 @@ export async function getCoverUrl(id: number): Promise<string | null> {
   return url;
 }
 
-/** Liberta caches quando uma música é apagada. */
+export function evictCoverUrl(id: number): void {
+  const c = coverUrlCache.get(id);
+  if (c) URL.revokeObjectURL(c);
+  coverUrlCache.delete(id);
+}
+
 export function evictSongUrls(id: number): void {
   const a = audioUrlCache.get(id);
   if (a) URL.revokeObjectURL(a);
   audioUrlCache.delete(id);
-  const c = coverUrlCache.get(id);
-  if (c) URL.revokeObjectURL(c);
-  coverUrlCache.delete(id);
+  evictCoverUrl(id);
 }
