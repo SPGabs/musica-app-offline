@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { PlaylistSummary, Song } from "@/lib/types";
 import { toSongMeta } from "@/lib/catalog";
+import { mimeFromFile } from "@/lib/mime";
 import {
   addSongRecord,
   createPlaylistRecord,
@@ -103,9 +104,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       lyrics: input.lyrics ?? null,
       lastPlayedAt: 0,
       playCount: 0,
-      audio: input.file.slice(0, input.file.size, input.file.type || "audio/mpeg"),
+      audio: input.file.slice(0, input.file.size, mimeFromFile(input.file)),
       cover: input.cover,
-      mime: input.file.type || "audio/mpeg",
+      mime: mimeFromFile(input.file),
     };
     const id = await addSongRecord(rec);
     setSongs((prev) => [toSongMeta({ ...rec, id }), ...prev]);

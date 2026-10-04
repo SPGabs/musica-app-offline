@@ -8,10 +8,55 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { toast } from "sonner";
 import type { RepeatMode, Song } from "@/lib/types";
 import { getAudioUrl, getCoverUrl } from "@/lib/localdb";
+import { isAwkwardOnIOS } from "@/lib/mime";
 import { loadPlayerState, savePlayerState } from "@/lib/persist";
+import { primeAudioElement } from "@/lib/unlock-audio";
+import { isAppleTouchDevice } from "@/lib/device";
 import { useLibrary } from "./library";
+
+function wireAudioElement(audio: HTMLAudioElement) {
+  audio.preload = "auto";
+  audio.setAttribute("playsinline", "true");
+  audio.setAttribute("webkit-playsinline", "true");
+  audio.controls = false;
+  audio.style.display = "none";
+  document.body.appendChild(audio);
+}
+
+function waitCanPlay(audio: HTMLAudioElement, timeoutMs = 8000): Promise<void> {
+  if (audio.readyState >= 2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, timeoutMs);
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onErr = () => {
+      cleanup();
+      reject(new Error("Falha ao carregar o áudio"));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      audio.removeEventListener("canplay", onReady);
+      audio.removeEventListener("error", onErr);
+    };
+    audio.addEventListener("canplay", onReady, { once: true });
+    audio.addEventListener("error", onErr, { once: true });
+  });
+}
+
+async function startPlayback(audio: HTMLAudioElement, speed: number, volume: number) {
+  audio.volume = volume;
+  audio.playbackRate = 1;
+  await audio.play();
+  audio.playbackRate = speed;
+}
 
 const SPEEDS = [0.8, 1, 1.25, 1.5, 2];
 
@@ -97,10 +142,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const current = currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null;
 
   useEffect(() => {
-    const a = new Audio();
-    const b = new Audio();
-    a.preload = "auto";
-    b.preload = "auto";
+    const a = document.createElement("audio");
+    const b = document.createElement("audio");
+    wireAudioElement(a);
+    wireAudioElement(b);
     primaryRef.current = a;
     secondaryRef.current = b;
     activeRef.current = a;
@@ -134,7 +179,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (activeRef.current !== audio) return;
         if (repeatRef.current === "one") {
           audio.currentTime = 0;
-          void audio.play();
+          void startPlayback(audio, speedRef.current, volumeRef.current).catch(() => undefined);
           return;
         }
         if (fadingRef.current) return;
@@ -157,6 +202,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         audio.removeEventListener("pause", onPause);
         audio.removeEventListener("ended", onEnded);
         audio.removeEventListener("error", onError);
+        audio.remove();
       };
     };
     const ua = bind(a);
@@ -182,53 +228,81 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setProgress(seekTo ?? 0);
     setDuration(song.duration || 0);
 
-    void getAudioUrl(song.id).then(async (url) => {
-      if (cancelled || !url) return;
-      setAudioUrl(url);
-      const fade = crossfadeRef.current;
-      const outgoing = activeRef.current;
-      const useFade = !!(fade > 0 && shouldPlay && outgoing && !outgoing.paused && incoming && outgoing.src);
+    const fail = (err?: unknown) => {
+      if (cancelled) return;
+      setIsPlaying(false);
+      if (!shouldPlay) return;
+      const awkward = isAwkwardOnIOS(song.fileName) && isAppleTouchDevice();
+      toast.error(
+        awkward
+          ? "Este formato (FLAC/OGG) não toca no iPhone/iPad. Converta para MP3 ou M4A."
+          : "Não foi possível reproduzir esta música.",
+      );
+      console.warn("playback failed", err);
+    };
 
-      if (useFade && incoming && outgoing) {
-        incoming.src = url;
-        applyRateAndVolume(incoming, speedRef.current, 0);
-        try {
-          await incoming.play();
-        } catch {
+    void getAudioUrl(song.id)
+      .then(async (url) => {
+        if (cancelled) return;
+        if (!url) throw new Error("Áudio não encontrado");
+        setAudioUrl(url);
+        const fade = crossfadeRef.current;
+        const outgoing = activeRef.current;
+        const useFade = !!(fade > 0 && shouldPlay && outgoing && !outgoing.paused && incoming && outgoing.src);
+
+        if (useFade && incoming && outgoing) {
+          incoming.src = url;
+          incoming.load();
+          incoming.volume = 0;
+          incoming.playbackRate = 1;
+          try {
+            await waitCanPlay(incoming);
+            if (cancelled) return;
+            await startPlayback(incoming, speedRef.current, 0);
+          } catch (err) {
+            outgoing.pause();
+            activeRef.current = incoming;
+            incoming.volume = volumeRef.current;
+            fail(err);
+            return;
+          }
+          const steps = 20;
+          const stepMs = (fade * 1000) / steps;
+          for (let i = 1; i <= steps; i++) {
+            if (cancelled) return;
+            const t = i / steps;
+            incoming.volume = volumeRef.current * t;
+            outgoing.volume = volumeRef.current * (1 - t);
+            await new Promise((r) => setTimeout(r, stepMs));
+          }
           outgoing.pause();
+          outgoing.removeAttribute("src");
+          outgoing.load();
+          incoming.volume = volumeRef.current;
+          incoming.playbackRate = speedRef.current;
           activeRef.current = incoming;
-          applyRateAndVolume(incoming, speedRef.current, volumeRef.current);
-          return;
+          fadingRef.current = false;
+        } else {
+          audio.src = url;
+          audio.load();
+          audio.volume = volumeRef.current;
+          audio.playbackRate = 1;
+          try {
+            await waitCanPlay(audio);
+            if (cancelled) return;
+            if (seekTo && seekTo > 0 && Number.isFinite(audio.duration)) {
+              audio.currentTime = seekTo;
+              setProgress(seekTo);
+            }
+            if (shouldPlay) await startPlayback(audio, speedRef.current, volumeRef.current);
+            else audio.pause();
+          } catch (err) {
+            fail(err);
+          }
+          fadingRef.current = false;
         }
-        const steps = 20;
-        const stepMs = (fade * 1000) / steps;
-        for (let i = 1; i <= steps; i++) {
-          if (cancelled) return;
-          const t = i / steps;
-          incoming.volume = volumeRef.current * t;
-          outgoing.volume = volumeRef.current * (1 - t);
-          await new Promise((r) => setTimeout(r, stepMs));
-        }
-        outgoing.pause();
-        outgoing.src = "";
-        applyRateAndVolume(incoming, speedRef.current, volumeRef.current);
-        activeRef.current = incoming;
-        fadingRef.current = false;
-      } else {
-        audio.src = url;
-        applyRateAndVolume(audio, speedRef.current, volumeRef.current);
-        if (seekTo && seekTo > 0) {
-          const onMeta = () => {
-            audio.currentTime = seekTo;
-            setProgress(seekTo);
-          };
-          audio.addEventListener("loadedmetadata", onMeta, { once: true });
-        }
-        if (shouldPlay) void audio.play().catch(() => setIsPlaying(false));
-        else audio.pause();
-        fadingRef.current = false;
-      }
-    });
+      })
+      .catch(fail);
 
     if ("mediaSession" in navigator) {
       void getCoverUrl(song.id).then((cover) => {
@@ -291,12 +365,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const playQueue = useCallback((list: Song[], startIndex = 0) => {
     if (!list.length) return;
+    primeAudioElement(activeRef.current);
     skipPlayRef.current = false;
     setQueue(list);
     setCurrentIndex(startIndex);
   }, []);
 
   const playSong = useCallback((song: Song) => {
+    primeAudioElement(activeRef.current);
     skipPlayRef.current = false;
     setQueue((q) => {
       const idx = q.findIndex((s) => s.id === song.id);
@@ -310,6 +386,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const playAt = useCallback((index: number) => {
+    primeAudioElement(activeRef.current);
     skipPlayRef.current = false;
     setCurrentIndex(index);
   }, []);
@@ -317,8 +394,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const toggle = useCallback(() => {
     const audio = activeRef.current;
     if (!audio || !current) return;
-    if (audio.paused) void audio.play().catch(() => {});
-    else audio.pause();
+    if (audio.paused) {
+      primeAudioElement(audio);
+      void startPlayback(audio, speedRef.current, volumeRef.current).catch(() => {
+        setIsPlaying(false);
+        toast.error("Não foi possível reproduzir esta música.");
+      });
+    } else audio.pause();
   }, [current]);
 
   const seek = useCallback((sec: number) => {
@@ -379,7 +461,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
-    navigator.mediaSession.setActionHandler("play", () => activeRef.current?.play());
+    navigator.mediaSession.setActionHandler("play", () => {
+      const audio = activeRef.current;
+      if (!audio) return;
+      void startPlayback(audio, speedRef.current, volumeRef.current).catch(() => undefined);
+    });
     navigator.mediaSession.setActionHandler("pause", () => activeRef.current?.pause());
     navigator.mediaSession.setActionHandler("previoustrack", prev);
     navigator.mediaSession.setActionHandler("nexttrack", () => nextRef.current(false));

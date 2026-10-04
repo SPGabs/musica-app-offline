@@ -1,4 +1,19 @@
+import { Capacitor } from "@capacitor/core";
+import { audioExtension, inferAudioMime } from "./mime";
 import type { Song } from "./types";
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Falha ao ler o áudio"));
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      const i = text.indexOf(",");
+      resolve(i >= 0 ? text.slice(i + 1) : text);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
 
 /** Registo completo de uma música guardado no IndexedDB. */
 export interface SongRecord extends Song {
@@ -150,8 +165,28 @@ export async function getAudioUrl(id: number): Promise<string | null> {
   const cached = audioUrlCache.get(id);
   if (cached) return cached;
   const rec = await getSongRecord(id);
-  if (!rec) return null;
-  const url = URL.createObjectURL(rec.audio);
+  if (!rec?.audio) return null;
+
+  const mime = inferAudioMime(rec.fileName, rec.mime);
+  const copy = new Blob([new Uint8Array(await rec.audio.arrayBuffer())], { type: mime });
+
+  // WKWebView (Capacitor) não reproduz blob: — gravamos um ficheiro e usamos convertFileSrc.
+  if (Capacitor.isNativePlatform()) {
+    const { Directory, Filesystem } = await import("@capacitor/filesystem");
+    const path = `musica-play/${id}${audioExtension(rec.fileName, mime)}`;
+    await Filesystem.writeFile({
+      path,
+      data: await blobToBase64(copy),
+      directory: Directory.Cache,
+      recursive: true,
+    });
+    const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
+    const url = Capacitor.convertFileSrc(uri);
+    audioUrlCache.set(id, url);
+    return url;
+  }
+
+  const url = URL.createObjectURL(copy);
   audioUrlCache.set(id, url);
   return url;
 }
@@ -172,7 +207,7 @@ export function evictCoverUrl(id: number): void {
 
 export function evictSongUrls(id: number): void {
   const a = audioUrlCache.get(id);
-  if (a) URL.revokeObjectURL(a);
+  if (a?.startsWith("blob:")) URL.revokeObjectURL(a);
   audioUrlCache.delete(id);
   evictCoverUrl(id);
 }

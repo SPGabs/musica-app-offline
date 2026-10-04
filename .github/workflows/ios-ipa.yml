@@ -37,6 +37,34 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/App/App/Info.plist || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/App/App/Info.plist || true
 
+      - name: Sessão de áudio nativa (ignorar o botão mute)
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+          p = Path("ios/App/App/AppDelegate.swift")
+          t = p.read_text()
+          if "AVAudioSession" not in t:
+              if "import Capacitor" in t:
+                  t = t.replace("import Capacitor", "import Capacitor\nimport AVFoundation", 1)
+              else:
+                  t = "import AVFoundation\n" + t
+              needle = "didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {\n"
+              insert = """        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("AVAudioSession: \\(error)")
+        }
+"""
+              idx = t.find(needle)
+              if idx < 0:
+                  raise SystemExit("AppDelegate: didFinishLaunching not found")
+              at = idx + len(needle)
+              t = t[:at] + insert + t[at:]
+              p.write_text(t)
+          print("AVAudioSession configured")
+          PY
+
       - name: Criar arquivo Xcode (sem assinatura)
         run: |
           cd ios/App

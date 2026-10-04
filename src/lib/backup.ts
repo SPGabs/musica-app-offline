@@ -1,3 +1,4 @@
+import { inferAudioMime } from "./mime";
 import {
   addSongRecord,
   createPlaylistRecord,
@@ -62,7 +63,9 @@ export async function importLibraryBackup(file: File): Promise<{ songs: number; 
   for (const meta of manifest.songs) {
     const audioFile = zip.file(`songs/${meta.id}.audio`);
     if (!audioFile) continue;
-    const audio = await audioFile.async("blob");
+    const audioRaw = await audioFile.async("blob");
+    const mime = inferAudioMime(meta.fileName, meta.mime);
+    const audio = new Blob([new Uint8Array(await audioRaw.arrayBuffer())], { type: mime });
     const coverFile = zip.file(`songs/${meta.id}.cover`);
     const cover = coverFile ? await coverFile.async("blob") : null;
     const newId = await addSongRecord({
@@ -79,7 +82,7 @@ export async function importLibraryBackup(file: File): Promise<{ songs: number; 
       playCount: meta.playCount ?? 0,
       audio,
       cover,
-      mime: meta.mime || "audio/mpeg",
+      mime,
     });
     idMap.set(meta.id, newId);
     songs += 1;
